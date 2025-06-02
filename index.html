@@ -67,7 +67,7 @@
                     <path d="M5 9H16.5C18.9853 9 21 11.0147 21 13.5C21 15.9853 18.9853 18 16.5 18H12M5 9L9 5M5 9L9 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             </button>
-            <button id="redoBtn" class="tool-button" title="Redo">
+            <button id="redoBtn" class="tool-button" title="Redo" disabled>
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M19 9H7.5C5.01472 9 3 11.0147 3 13.5C3 15.9853 5.01472 18 7.5 18H12M19 9L15 5M19 9L15 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
@@ -89,7 +89,6 @@
             set, 
             onValue,
             push,
-            update,
             remove
         } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-database.js";
 
@@ -141,27 +140,28 @@
             // Draw all paths in order
             pathOrder.forEach(key => {
                 const path = allPaths[key];
-                if (!path) return;
+                if (!path || !path.points) return;
                 
                 if (path.points.length < 2) return;
                 
                 ctx.beginPath();
                 ctx.moveTo(path.points[0].x, path.points[0].y);
+                ctx.strokeStyle = path.points[0].color;
+                ctx.lineWidth = 5;
                 
                 for (let i = 1; i < path.points.length; i++) {
-                    ctx.strokeStyle = path.points[i].color;
-                    ctx.lineWidth = 5;
                     ctx.lineTo(path.points[i].x, path.points[i].y);
                     ctx.stroke();
                     ctx.beginPath();
                     ctx.moveTo(path.points[i].x, path.points[i].y);
                 }
             });
+            
+            updateButtonStates();
         }
         
         function updateButtonStates() {
             undoBtn.disabled = pathOrder.length === 0;
-            redoBtn.disabled = true; // Redo not implemented for sync
         }
 
         // Get position from event
@@ -248,19 +248,12 @@
             );
             
             redrawCanvas();
-            updateButtonStates();
         });
 
         // Clear canvas (sync across all devices)
         clearBtn.addEventListener('click', () => {
-            // Clear locally first for responsiveness
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            allPaths = {};
-            pathOrder = [];
-            updateButtonStates();
-            
-            // Then clear in Firebase
-            set(ref(db, 'drawingPaths'), null);
+            // Clear in Firebase - this will trigger the onValue callback
+            set(ref(db, 'drawingPaths'), {});
         });
         
         // Undo (sync across all devices)
@@ -270,10 +263,8 @@
             // Get the last path key
             const lastKey = pathOrder[pathOrder.length - 1];
             
-            // Remove from Firebase
+            // Remove from Firebase - this will trigger the onValue callback
             remove(ref(db, `drawingPaths/${lastKey}`));
-            
-            // Note: The onValue listener will handle the local update
         });
         
         // Keyboard shortcuts
