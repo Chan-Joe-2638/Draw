@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Drawing</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+        }
+        canvas {
+            display: block;
+            background-color: white;
+            width: 100vw;
+            height: 100vh;
+            position: fixed;
+            top: 0;
+            left: 0;
+        }
+        #tools {
+            position: fixed;
+            top: 15px;
+            left: 15px;
+            z-index: 100;
+            background: rgba(255,255,255,0.7);
+            padding: 10px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #tools input, #tools button {
+            display: block;
+            margin-bottom: 0;
+        }
+        .tool-button {
+            background: none;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 5px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .tool-button svg {
+            width: 20px;
+            height: 20px;
+        }
+        .button-group {
+            display: flex;
+            gap: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="tools">
+        <input type="color" id="colorPicker" value="#000000">
+        <div class="button-group">
+            <button id="undoBtn" class="tool-button" title="Undo">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M5 9H16.5C18.9853 9 21 11.0147 21 13.5C21 15.9853 18.9853 18 16.5 18H12M5 9L9 5M5 9L9 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+            <button id="redoBtn" class="tool-button" title="Redo">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M19 9H7.5C5.01472 9 3 11.0147 3 13.5C3 15.9853 5.01472 18 7.5 18H12M19 9L15 5M19 9L15 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+        </div>
+        <button id="clearBtn" class="tool-button" title="Clear">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M19 7L18.1327 19.1425C18.0579 20.1891 17.187 21 16.1378 21H7.86224C6.81296 21 5.94208 20.1891 5.86732 19.1425L5 7M10 11V17M14 11V17M15 7V4C15 3.44772 14.5523 3 14 3H10C9.44772 3 9 3.44772 9 4V7M4 7H20" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
+    </div>
+    <canvas id="drawingCanvas"></canvas>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
+        import { 
+            getDatabase, 
+            ref, 
+            set, 
+            onValue,
+            push 
+        } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBiZiXJVm064xR7NAK-8Q_eiaRAWA5Sg44",
+            authDomain: "test-2638.firebaseapp.com",
+            databaseURL: "https://test-2638-default-rtdb.firebaseio.com",
+            projectId: "test-2638",
+            storageBucket: "test-2638.firebasestorage.app",
+            messagingSenderId: "91959188509",
+            appId: "1:91959188509:web:94d251c3423b16b4e87af4"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d');
+        const colorPicker = document.getElementById('colorPicker');
+        const clearBtn = document.getElementById('clearBtn');
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+
+        // Set canvas to fixed size
+        function initializeCanvas() {
+            const ratio = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * ratio;
+            canvas.height = window.innerHeight * ratio;
+            canvas.style.width = window.innerWidth + 'px';
+            canvas.style.height = window.innerHeight + 'px';
+            ctx.scale(ratio, ratio);
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+        }
+        initializeCanvas();
+
+        // Drawing state
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        let currentPath = [];
+        
+        // Undo/Redo functionality
+        let drawingHistory = [];
+        let historyIndex = -1;
+        
+        function saveState() {
+            if (historyIndex < drawingHistory.length - 1) {
+                drawingHistory = drawingHistory.slice(0, historyIndex + 1);
+            }
+            
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            drawingHistory.push(imageData);
+            historyIndex++;
+            
+            if (drawingHistory.length > 50) {
+                drawingHistory.shift();
+                historyIndex--;
+            }
+            
+            updateButtonStates();
+        }
+        
+        function undo() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                ctx.putImageData(drawingHistory[historyIndex], 0, 0);
+                updateButtonStates();
+            }
+        }
+        
+        function redo() {
+            if (historyIndex < drawingHistory.length - 1) {
+                historyIndex++;
+                ctx.putImageData(drawingHistory[historyIndex], 0, 0);
+                updateButtonStates();
+            }
+        }
+        
+        function updateButtonStates() {
+            undoBtn.disabled = historyIndex <= 0;
+            redoBtn.disabled = historyIndex >= drawingHistory.length - 1;
+        }
+
+        // Get position from event
+        function getPosition(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX || e.touches[0].clientX) - rect.left;
+            const y = (e.clientY || e.touches[0].clientY) - rect.top;
+            return { x, y };
+        }
+
+        function startDrawing(e) {
+            e.preventDefault();
+            if (e.touches && e.touches.length > 1) return;
+            
+            isDrawing = true;
+            const pos = getPosition(e);
+            lastX = pos.x;
+            lastY = pos.y;
+            currentPath = [{
+                x: lastX,
+                y: lastY,
+                color: colorPicker.value
+            }];
+        }
+
+        function draw(e) {
+            e.preventDefault();
+            if (!isDrawing) return;
+            if (e.touches && e.touches.length > 1) return;
+            
+            const pos = getPosition(e);
+            
+            ctx.strokeStyle = colorPicker.value;
+            ctx.lineWidth = 5; // Fixed pen size
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+            
+            currentPath.push({
+                x: pos.x,
+                y: pos.y,
+                color: colorPicker.value
+            });
+            
+            [lastX, lastY] = [pos.x, pos.y];
+        }
+
+        function endDrawing(e) {
+            if (!isDrawing) return;
+            e.preventDefault();
+            
+            if (currentPath.length > 1) {
+                push(ref(db, 'drawingPaths'), {
+                    path: currentPath,
+                    timestamp: Date.now()
+                });
+            }
+            
+            saveState();
+            isDrawing = false;
+            currentPath = [];
+        }
+
+        // Event listeners
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', endDrawing);
+        canvas.addEventListener('mouseout', endDrawing);
+        
+        canvas.addEventListener('touchstart', startDrawing, { passive: false });
+        canvas.addEventListener('touchmove', draw, { passive: false });
+        canvas.addEventListener('touchend', endDrawing, { passive: false });
+
+        // Receive and render drawings from others
+        onValue(ref(db, 'drawingPaths'), (snapshot) => {
+            const paths = snapshot.val();
+            if (paths) {
+                const currentState = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                Object.values(paths).forEach(pathObj => {
+                    const path = pathObj.path;
+                    if (path.length < 2) return;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(path[0].x, path[0].y);
+                    
+                    for (let i = 1; i < path.length; i++) {
+                        ctx.strokeStyle = path[i].color;
+                        ctx.lineWidth = 5; // Fixed pen size
+                        ctx.lineTo(path[i].x, path[i].y);
+                        ctx.stroke();
+                        ctx.beginPath();
+                        ctx.moveTo(path[i].x, path[i].y);
+                    }
+                });
+                
+                if (isDrawing) {
+                    ctx.putImageData(currentState, 0, 0);
+                } else {
+                    saveState();
+                }
+            }
+        });
+
+        // Clear canvas
+        clearBtn.addEventListener('click', () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            set(ref(db, 'drawingPaths'), null);
+            saveState();
+        });
+        
+        // Undo/Redo buttons
+        undoBtn.addEventListener('click', undo);
+        redoBtn.addEventListener('click', redo);
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'z') {
+                e.preventDefault();
+                undo();
+            } else if (e.ctrlKey && e.key === 'y') {
+                e.preventDefault();
+                redo();
+            }
+        });
+        
+        // Initial save of blank canvas
+        saveState();
+    </script>
+</body>
+</html>
