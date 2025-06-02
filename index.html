@@ -194,6 +194,7 @@
             
             const pos = getPosition(e);
             
+            // Draw locally for immediate feedback
             ctx.strokeStyle = colorPicker.value;
             ctx.lineWidth = 5;
             ctx.beginPath();
@@ -220,6 +221,8 @@
                 set(newPathRef, {
                     points: currentPath,
                     timestamp: Date.now()
+                }).catch(error => {
+                    console.error("Error saving path:", error);
                 });
             }
             
@@ -243,17 +246,24 @@
             
             // Update our local path storage
             allPaths = paths;
-            pathOrder = Object.keys(paths).sort((a, b) => 
-                paths[a].timestamp - paths[b].timestamp
-            );
+            
+            // Convert to array and sort by timestamp
+            pathOrder = Object.keys(paths)
+                .filter(key => paths[key] && paths[key].timestamp)
+                .sort((a, b) => paths[a].timestamp - paths[b].timestamp);
             
             redrawCanvas();
+        }, (error) => {
+            console.error("Firebase read failed:", error);
         });
 
         // Clear canvas (sync across all devices)
         clearBtn.addEventListener('click', () => {
             // Clear in Firebase - this will trigger the onValue callback
-            set(ref(db, 'drawingPaths'), {});
+            set(ref(db, 'drawingPaths'), null)
+                .catch(error => {
+                    console.error("Error clearing canvas:", error);
+                });
         });
         
         // Undo (sync across all devices)
@@ -264,14 +274,17 @@
             const lastKey = pathOrder[pathOrder.length - 1];
             
             // Remove from Firebase - this will trigger the onValue callback
-            remove(ref(db, `drawingPaths/${lastKey}`));
+            remove(ref(db, `drawingPaths/${lastKey}`))
+                .catch(error => {
+                    console.error("Error undoing path:", error);
+                });
         });
         
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.key === 'z') {
                 e.preventDefault();
-                undoBtn.click();
+                if (!undoBtn.disabled) undoBtn.click();
             }
         });
         
