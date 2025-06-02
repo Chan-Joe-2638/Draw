@@ -88,7 +88,9 @@
             ref, 
             set, 
             onValue,
-            push 
+            push,
+            update,
+            remove
         } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-database.js";
 
         const firebaseConfig = {
@@ -129,46 +131,37 @@
         let lastY = 0;
         let currentPath = [];
         
-        // Undo/Redo functionality
-        let drawingHistory = [];
-        let historyIndex = -1;
+        // Track all paths with their Firebase keys
+        let allPaths = {};
+        let pathOrder = [];
         
-        function saveState() {
-            if (historyIndex < drawingHistory.length - 1) {
-                drawingHistory = drawingHistory.slice(0, historyIndex + 1);
-            }
+        function redrawCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            drawingHistory.push(imageData);
-            historyIndex++;
-            
-            if (drawingHistory.length > 50) {
-                drawingHistory.shift();
-                historyIndex--;
-            }
-            
-            updateButtonStates();
-        }
-        
-        function undo() {
-            if (historyIndex > 0) {
-                historyIndex--;
-                ctx.putImageData(drawingHistory[historyIndex], 0, 0);
-                updateButtonStates();
-            }
-        }
-        
-        function redo() {
-            if (historyIndex < drawingHistory.length - 1) {
-                historyIndex++;
-                ctx.putImageData(drawingHistory[historyIndex], 0, 0);
-                updateButtonStates();
-            }
+            // Draw all paths in order
+            pathOrder.forEach(key => {
+                const path = allPaths[key];
+                if (!path) return;
+                
+                if (path.points.length < 2) return;
+                
+                ctx.beginPath();
+                ctx.moveTo(path.points[0].x, path.points[0].y);
+                
+                for (let i = 1; i < path.points.length; i++) {
+                    ctx.strokeStyle = path.points[i].color;
+                    ctx.lineWidth = 5;
+                    ctx.lineTo(path.points[i].x, path.points[i].y);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(path.points[i].x, path.points[i].y);
+                }
+            });
         }
         
         function updateButtonStates() {
-            undoBtn.disabled = historyIndex <= 0;
-            redoBtn.disabled = historyIndex >= drawingHistory.length - 1;
+            undoBtn.disabled = pathOrder.length === 0;
+            redoBtn.disabled = true; // Redo not implemented for sync
         }
 
         // Get position from event
@@ -202,7 +195,7 @@
             const pos = getPosition(e);
             
             ctx.strokeStyle = colorPicker.value;
-            ctx.lineWidth = 5; // Fixed pen size
+            ctx.lineWidth = 5;
             ctx.beginPath();
             ctx.moveTo(lastX, lastY);
             ctx.lineTo(pos.x, pos.y);
@@ -222,13 +215,14 @@
             e.preventDefault();
             
             if (currentPath.length > 1) {
-                push(ref(db, 'drawingPaths'), {
-                    path: currentPath,
+                // Push new path to Firebase
+                const newPathRef = push(ref(db, 'drawingPaths'));
+                set(newPathRef, {
+                    points: currentPath,
                     timestamp: Date.now()
                 });
             }
             
-            saveState();
             isDrawing = false;
             currentPath = [];
         }
@@ -245,60 +239,53 @@
 
         // Receive and render drawings from others
         onValue(ref(db, 'drawingPaths'), (snapshot) => {
-            const paths = snapshot.val();
-            if (paths) {
-                const currentState = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                
-                Object.values(paths).forEach(pathObj => {
-                    const path = pathObj.path;
-                    if (path.length < 2) return;
-                    
-                    ctx.beginPath();
-                    ctx.moveTo(path[0].x, path[0].y);
-                    
-                    for (let i = 1; i < path.length; i++) {
-                        ctx.strokeStyle = path[i].color;
-                        ctx.lineWidth = 5; // Fixed pen size
-                        ctx.lineTo(path[i].x, path[i].y);
-                        ctx.stroke();
-                        ctx.beginPath();
-                        ctx.moveTo(path[i].x, path[i].y);
-                    }
-                });
-                
-                if (isDrawing) {
-                    ctx.putImageData(currentState, 0, 0);
-                } else {
-                    saveState();
-                }
-            }
+            const paths = snapshot.val() || {};
+            
+            // Update our local path storage
+            allPaths = paths;
+            pathOrder = Object.keys(paths).sort((a, b) => 
+                paths[a].timestamp - paths[b].timestamp
+            );
+            
+            redrawCanvas();
+            updateButtonStates();
         });
 
-        // Clear canvas
+        // Clear canvas (sync across all devices)
         clearBtn.addEventListener('click', () => {
+            // Clear locally first for responsiveness
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            allPaths = {};
+            pathOrder = [];
+            updateButtonStates();
+            
+            // Then clear in Firebase
             set(ref(db, 'drawingPaths'), null);
-            saveState();
         });
         
-        // Undo/Redo buttons
-        undoBtn.addEventListener('click', undo);
-        redoBtn.addEventListener('click', redo);
+        // Undo (sync across all devices)
+        undoBtn.addEventListener('click', () => {
+            if (pathOrder.length === 0) return;
+            
+            // Get the last path key
+            const lastKey = pathOrder[pathOrder.length - 1];
+            
+            // Remove from Firebase
+            remove(ref(db, `drawingPaths/${lastKey}`));
+            
+            // Note: The onValue listener will handle the local update
+        });
         
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.key === 'z') {
                 e.preventDefault();
-                undo();
-            } else if (e.ctrlKey && e.key === 'y') {
-                e.preventDefault();
-                redo();
+                undoBtn.click();
             }
         });
         
-        // Initial save of blank canvas
-        saveState();
+        // Initial button state
+        updateButtonStates();
     </script>
 </body>
 </html>
